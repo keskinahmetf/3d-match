@@ -130,6 +130,7 @@ button.primary{background:var(--accent);color:var(--accent-text);border-color:tr
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
 <script>
 (function(){
@@ -149,7 +150,8 @@ const easeOutBounce = x => {
 /* ================= renderer ================= */
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+const DPR = window.devicePixelRatio || 1;
+renderer.setPixelRatio(window.innerWidth*window.innerHeight*DPR*DPR > 3000000 ? 1 : Math.min(DPR, 1.25));
 // if the GPU drops the drawing context, ask the browser to restore it instead of failing
 canvas.addEventListener('webglcontextlost', e => e.preventDefault(), false);
 renderer.outputEncoding = THREE.sRGBEncoding;
@@ -161,7 +163,7 @@ renderer.setClearColor(0x000000, 0);
 
 const pmrem = new THREE.PMREMGenerator(renderer);
 const envScene = new THREE.Scene();
-envScene.add(new THREE.Mesh(new THREE.SphereGeometry(20, 32, 16),
+envScene.add(new THREE.Mesh(new THREE.SphereGeometry(20, 16, 8),
   new THREE.MeshBasicMaterial({side:THREE.BackSide, color:new THREE.Color(0.18,0.17,0.17)})));
 [[16,6,[0,14,4],2.6,[1,0.92,0.82]],[6,12,[-12,4,7],1.4,[1,0.9,0.8]],[6,12,[12,3,-5],1.0,[0.75,0.88,1]]].forEach(([w,h,p,k,c]) => {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
@@ -230,7 +232,7 @@ const glowTex = canvasTex(128, 128, (g, s) => {
 });
 
 /* ================= materials ================= */
-const plastic = c => new THREE.MeshPhysicalMaterial({color:c, roughness:0.45, clearcoat:0.3, clearcoatRoughness:0.3, envMapIntensity:0.6});
+const plastic = c => new THREE.MeshStandardMaterial({color:c, roughness:0.42, envMapIntensity:0.65});
 const T = {
   red:plastic(0xc8413b), orange:plastic(0xdc7434), yellow:plastic(0xe6ad34), green:plastic(0x5a9750),
   teal:plastic(0x2c8a86), blue:plastic(0x386ab0), navy:plastic(0x2b3d66), purple:plastic(0x7b58a5),
@@ -256,18 +258,42 @@ function mk(parent, geo, mat, pos, rot, scl){
   parent.add(m); return m;
 }
 function capsule(r0, r1, h, segs){
-  const pts = [], cap = 0.6, n = 10;
+  const pts = [], cap = 0.6, n = 6;
   for (let i = 0; i <= n; i++){ const a = -Math.PI/2 + i/n*Math.PI/2;
     pts.push(new THREE.Vector2(Math.max(0.0001, r0*Math.cos(a)), r0*cap*Math.sin(a))); }
   for (let i = 0; i <= n; i++){ const a = i/n*Math.PI/2;
     pts.push(new THREE.Vector2(Math.max(0.0001, r1*Math.cos(a)), h + r1*cap*Math.sin(a))); }
-  const g = new THREE.LatheGeometry(pts, segs || 28);
+  const g = new THREE.LatheGeometry(pts, segs || 14);
   g.translate(0, -(h + r1*cap - r0*cap)/2, 0);
   return g;
 }
 function smoothLathe(coords){
   const curve = new THREE.SplineCurve(coords.map(c => new THREE.Vector2(c[0], c[1])));
-  return new THREE.LatheGeometry(curve.getPoints(36).map(p => new THREE.Vector2(Math.max(0.0001, p.x), p.y)), 44);
+  return new THREE.LatheGeometry(curve.getPoints(18).map(p => new THREE.Vector2(Math.max(0.0001, p.x), p.y)), 24);
+}
+// bake all meshes of an object into one mesh per material: far fewer draw calls
+function mergeByMaterial(g){
+  g.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(g.matrixWorld).invert();
+  const buckets = new Map(), remove = [];
+  g.traverse(o => {
+    if (!o.isMesh || Array.isArray(o.material) || o.userData.eye) return;
+    const geo = (o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone());
+    Object.keys(geo.attributes).forEach(k => { if (k !== 'position' && k !== 'normal' && k !== 'uv') geo.deleteAttribute(k); });
+    if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count*2), 2));
+    geo.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld));
+    if (!buckets.has(o.material)) buckets.set(o.material, []);
+    buckets.get(o.material).push(geo);
+    remove.push(o);
+  });
+  remove.forEach(o => o.parent.remove(o));
+  buckets.forEach((geos, mat) => {
+    const merged = geos.length === 1 ? geos[0] : THREE.BufferGeometryUtils.mergeBufferGeometries(geos, false);
+    const m = new THREE.Mesh(merged, mat);
+    m.castShadow = mat !== M.cyan; m.receiveShadow = true;
+    g.add(m);
+  });
+  return g;
 }
 function recenter(g){
   g.updateMatrixWorld(true);
@@ -280,11 +306,11 @@ function recenter(g){
 const TOYS = {
   duck(){
     const g = new THREE.Group();
-    mk(g, new THREE.SphereGeometry(0.32, 28, 20), T.yellow, [0, 0, 0], null, [1.25, 0.82, 1]);
-    mk(g, new THREE.SphereGeometry(0.2, 24, 18), T.yellow, [0.24, 0.3, 0]);
-    mk(g, new THREE.ConeGeometry(0.075, 0.18, 16), T.orange, [0.47, 0.27, 0], [0, 0, -Math.PI/2], [1, 1, 0.6]);
-    [-1, 1].forEach(s => mk(g, new THREE.SphereGeometry(0.03, 10, 8), T.dark, [0.36, 0.36, s*0.11]));
-    mk(g, new THREE.ConeGeometry(0.1, 0.2, 16), T.yellow, [-0.42, 0.12, 0], [0, 0, 0.9]);
+    mk(g, new THREE.SphereGeometry(0.32, 14, 10), T.yellow, [0, 0, 0], null, [1.25, 0.82, 1]);
+    mk(g, new THREE.SphereGeometry(0.2, 12, 9), T.yellow, [0.24, 0.3, 0]);
+    mk(g, new THREE.ConeGeometry(0.075, 0.18, 8), T.orange, [0.47, 0.27, 0], [0, 0, -Math.PI/2], [1, 1, 0.6]);
+    [-1, 1].forEach(s => mk(g, new THREE.SphereGeometry(0.03, 10, 7), T.dark, [0.36, 0.36, s*0.11]));
+    mk(g, new THREE.ConeGeometry(0.1, 0.2, 8), T.yellow, [-0.42, 0.12, 0], [0, 0, 0.9]);
     return g;
   },
   car(){
@@ -293,47 +319,47 @@ const TOYS = {
     mk(g, new THREE.BoxGeometry(0.46, 0.22, 0.46), T.red, [-0.06, 0.32, 0]);
     mk(g, new THREE.BoxGeometry(0.4, 0.15, 0.48), T.glass, [-0.06, 0.33, 0]);
     [[0.29,0.26],[0.29,-0.26],[-0.29,0.26],[-0.29,-0.26]].forEach(([x, z]) => {
-      mk(g, new THREE.CylinderGeometry(0.14, 0.14, 0.09, 20), T.dark, [x, -0.02, z], [Math.PI/2, 0, 0]);
-      mk(g, new THREE.CylinderGeometry(0.06, 0.06, 0.1, 12), T.cream, [x, -0.02, z], [Math.PI/2, 0, 0]);
+      mk(g, new THREE.CylinderGeometry(0.14, 0.14, 0.09, 10), T.dark, [x, -0.02, z], [Math.PI/2, 0, 0]);
+      mk(g, new THREE.CylinderGeometry(0.06, 0.06, 0.1, 10), T.cream, [x, -0.02, z], [Math.PI/2, 0, 0]);
     });
-    [-1, 1].forEach(s => mk(g, new THREE.SphereGeometry(0.045, 10, 8), T.yellow, [0.46, 0.12, s*0.15]));
+    [-1, 1].forEach(s => mk(g, new THREE.SphereGeometry(0.045, 10, 7), T.yellow, [0.46, 0.12, s*0.15]));
     return g;
   },
   rocket(){
     const g = new THREE.Group();
     mk(g, capsule(0.17, 0.17, 0.4), T.cream, [0, 0, 0]);
-    mk(g, new THREE.ConeGeometry(0.16, 0.3, 24), T.red, [0, 0.4, 0]);
-    mk(g, new THREE.CylinderGeometry(0.075, 0.075, 0.04, 20), T.glass, [0, 0.1, 0.16], [Math.PI/2, 0, 0]);
+    mk(g, new THREE.ConeGeometry(0.16, 0.3, 12), T.red, [0, 0.4, 0]);
+    mk(g, new THREE.CylinderGeometry(0.075, 0.075, 0.04, 10), T.glass, [0, 0.1, 0.16], [Math.PI/2, 0, 0]);
     for (let k = 0; k < 3; k++){
       const a = k*Math.PI*2/3 + Math.PI/2;
       mk(g, new THREE.BoxGeometry(0.16, 0.22, 0.03), T.red, [Math.cos(a)*0.2, -0.22, Math.sin(a)*0.2], [0, -a, 0]);
     }
-    mk(g, new THREE.ConeGeometry(0.09, 0.16, 16), T.orange, [0, -0.38, 0], [Math.PI, 0, 0]);
+    mk(g, new THREE.ConeGeometry(0.09, 0.16, 8), T.orange, [0, -0.38, 0], [Math.PI, 0, 0]);
     return g;
   },
   teddy(){
     const g = new THREE.Group();
-    mk(g, new THREE.SphereGeometry(0.26, 24, 18), T.fur, [0, 0, 0], null, [1, 1.1, 0.9]);
-    mk(g, new THREE.SphereGeometry(0.21, 24, 18), T.fur, [0, 0.4, 0]);
+    mk(g, new THREE.SphereGeometry(0.26, 12, 9), T.fur, [0, 0, 0], null, [1, 1.1, 0.9]);
+    mk(g, new THREE.SphereGeometry(0.21, 12, 9), T.fur, [0, 0.4, 0]);
     [-1, 1].forEach(s => {
-      mk(g, new THREE.SphereGeometry(0.08, 14, 10), T.fur, [s*0.16, 0.57, 0]);
-      mk(g, new THREE.SphereGeometry(0.045, 12, 8), T.furLight, [s*0.16, 0.57, 0.04]);
-      mk(g, new THREE.SphereGeometry(0.09, 14, 10), T.fur, [s*0.26, 0.06, 0.06]);
-      mk(g, new THREE.SphereGeometry(0.1, 14, 10), T.fur, [s*0.15, -0.24, 0.1]);
-      mk(g, new THREE.SphereGeometry(0.025, 8, 6), T.dark, [s*0.08, 0.46, 0.18]);
+      mk(g, new THREE.SphereGeometry(0.08, 10, 7), T.fur, [s*0.16, 0.57, 0]);
+      mk(g, new THREE.SphereGeometry(0.045, 10, 7), T.furLight, [s*0.16, 0.57, 0.04]);
+      mk(g, new THREE.SphereGeometry(0.09, 10, 7), T.fur, [s*0.26, 0.06, 0.06]);
+      mk(g, new THREE.SphereGeometry(0.1, 10, 7), T.fur, [s*0.15, -0.24, 0.1]);
+      mk(g, new THREE.SphereGeometry(0.025, 10, 7), T.dark, [s*0.08, 0.46, 0.18]);
     });
-    mk(g, new THREE.SphereGeometry(0.085, 16, 12), T.furLight, [0, 0.35, 0.17]);
-    mk(g, new THREE.SphereGeometry(0.03, 10, 8), T.dark, [0, 0.38, 0.25]);
-    mk(g, new THREE.SphereGeometry(0.13, 16, 12), T.furLight, [0, 0.0, 0.17], null, [1, 1.1, 0.5]);
+    mk(g, new THREE.SphereGeometry(0.085, 10, 7), T.furLight, [0, 0.35, 0.17]);
+    mk(g, new THREE.SphereGeometry(0.03, 10, 7), T.dark, [0, 0.38, 0.25]);
+    mk(g, new THREE.SphereGeometry(0.13, 10, 7), T.furLight, [0, 0.0, 0.17], null, [1, 1.1, 0.5]);
     return g;
   },
   rings(){
     const g = new THREE.Group();
-    mk(g, new THREE.CylinderGeometry(0.3, 0.32, 0.08, 28), T.wood, [0, 0, 0]);
-    mk(g, new THREE.CylinderGeometry(0.04, 0.04, 0.6, 12), T.wood, [0, 0.3, 0]);
+    mk(g, new THREE.CylinderGeometry(0.3, 0.32, 0.08, 14), T.wood, [0, 0, 0]);
+    mk(g, new THREE.CylinderGeometry(0.04, 0.04, 0.6, 10), T.wood, [0, 0.3, 0]);
     [[0.21, T.red], [0.18, T.orange], [0.15, T.yellow], [0.12, T.green]].forEach(([r, m], i) =>
-      mk(g, new THREE.TorusGeometry(r, 0.07, 12, 28), m, [0, 0.11 + i*0.12, 0], [Math.PI/2, 0, 0]));
-    mk(g, new THREE.SphereGeometry(0.07, 14, 10), T.blue, [0, 0.62, 0]);
+      mk(g, new THREE.TorusGeometry(r, 0.07, 6, 14), m, [0, 0.11 + i*0.12, 0], [Math.PI/2, 0, 0]));
+    mk(g, new THREE.SphereGeometry(0.07, 10, 7), T.blue, [0, 0.62, 0]);
     return g;
   },
   block(){
@@ -346,11 +372,11 @@ const TOYS = {
   },
   mushroom(){
     const g = new THREE.Group();
-    mk(g, new THREE.CylinderGeometry(0.11, 0.15, 0.3, 20), T.cream, [0, -0.08, 0]);
-    mk(g, new THREE.SphereGeometry(0.33, 28, 14, 0, Math.PI*2, 0, Math.PI/2), T.red, [0, 0.05, 0], null, [1, 0.72, 1]);
-    mk(g, new THREE.CylinderGeometry(0.33, 0.33, 0.02, 28), T.cream, [0, 0.05, 0]);
+    mk(g, new THREE.CylinderGeometry(0.11, 0.15, 0.3, 10), T.cream, [0, -0.08, 0]);
+    mk(g, new THREE.SphereGeometry(0.33, 14, 7, 0, Math.PI*2, 0, Math.PI/2), T.red, [0, 0.05, 0], null, [1, 0.72, 1]);
+    mk(g, new THREE.CylinderGeometry(0.33, 0.33, 0.02, 14), T.cream, [0, 0.05, 0]);
     [[0.3,0],[0.6,1.2],[0.6,2.6],[0.65,4.0],[0.62,5.3],[0.95,0.6],[0.95,3.3]].forEach(([phi, th]) =>
-      mk(g, new THREE.SphereGeometry(0.045, 10, 8), T.cream,
+      mk(g, new THREE.SphereGeometry(0.045, 10, 7), T.cream,
         [0.33*Math.sin(phi)*Math.cos(th), 0.05 + 0.72*0.33*Math.cos(phi), 0.33*Math.sin(phi)*Math.sin(th)], null, [1, 0.6, 1]));
     return g;
   },
@@ -361,7 +387,7 @@ const TOYS = {
     hull.translate(0, 0, -0.15);
     mk(g, hull, T.blue, [0, 0, 0]);
     mk(g, new THREE.BoxGeometry(0.8, 0.03, 0.3), T.cream, [0, 0.12, 0]);
-    mk(g, new THREE.CylinderGeometry(0.02, 0.02, 0.7, 8), T.wood, [0, 0.47, 0]);
+    mk(g, new THREE.CylinderGeometry(0.02, 0.02, 0.7, 10), T.wood, [0, 0.47, 0]);
     const ss = new THREE.Shape(); ss.moveTo(0, 0); ss.lineTo(0, 0.52); ss.lineTo(0.34, 0); ss.closePath();
     mk(g, new THREE.ExtrudeGeometry(ss, {depth:0.015, bevelEnabled:false}), T.cream, [0.03, 0.18, -0.008]);
     const s2 = new THREE.Shape(); s2.moveTo(0, 0); s2.lineTo(0, 0.4); s2.lineTo(-0.24, 0); s2.closePath();
@@ -380,7 +406,7 @@ const TOYS = {
   },
   ball(){
     const g = new THREE.Group();
-    mk(g, new THREE.SphereGeometry(0.3, 32, 20), new THREE.MeshPhysicalMaterial({map:ballTex, roughness:0.35, clearcoat:0.6, envMapIntensity:0.6}), [0, 0, 0]);
+    mk(g, new THREE.SphereGeometry(0.3, 16, 10), new THREE.MeshPhysicalMaterial({map:ballTex, roughness:0.35, clearcoat:0.6, envMapIntensity:0.6}), [0, 0, 0]);
     return g;
   },
   star(){
@@ -406,45 +432,45 @@ function buildRobot(){
 
   const head = part('head');
   const HY = 5.55, HR = 1.05, HS = [1.08, 0.95, 0.97];
-  add(head, new THREE.SphereGeometry(HR, 48, 36), 'white', [0, HY, 0], null, HS);
-  add(head, new THREE.SphereGeometry(HR*1.012, 48, 24, Math.PI/2 - 0.98, 1.96, 1.08, 1.0), 'visor', [0, HY, 0], null, HS);
+  add(head, new THREE.SphereGeometry(HR, 24, 18), 'white', [0, HY, 0], null, HS);
+  add(head, new THREE.SphereGeometry(HR*1.012, 24, 12, Math.PI/2 - 0.98, 1.96, 1.08, 1.0), 'visor', [0, HY, 0], null, HS);
   [-1, 1].forEach(s => {
     const r = HR*1.03, phi = Math.PI/2 - s*0.37, th = 1.55;
     const p = new THREE.Vector3(-r*Math.cos(phi)*Math.sin(th)*HS[0], r*Math.cos(th)*HS[1], r*Math.sin(phi)*Math.sin(th)*HS[2]);
     const n = new THREE.Vector3(p.x/(HS[0]*HS[0]), p.y/(HS[1]*HS[1]), p.z/(HS[2]*HS[2])).normalize();
-    const eye = add(head, new THREE.SphereGeometry(0.2, 24, 16), 'cyan', [p.x, HY + p.y, p.z], null, [0.78, 1, 0.22]);
+    const eye = add(head, new THREE.SphereGeometry(0.2, 12, 8), 'cyan', [p.x, HY + p.y, p.z], null, [0.78, 1, 0.22]);
     eye.lookAt(eye.position.clone().add(n));
     eye.userData.eye = true;
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex, blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, toneMapped:false}));
     glow.position.copy(eye.position).addScaledVector(n, 0.06);
     glow.scale.set(0.8, 0.95, 1);
     head.add(glow);
-    add(head, new THREE.CylinderGeometry(0.34, 0.34, 0.22, 36), 'white', [s*1.1, HY - 0.05, 0], [0, 0, Math.PI/2]);
-    add(head, new THREE.CylinderGeometry(0.27, 0.27, 0.24, 36), 'cyan', [s*1.1, HY - 0.05, 0], [0, 0, Math.PI/2]);
-    add(head, new THREE.CylinderGeometry(0.17, 0.17, 0.26, 28), 'black', [s*1.1, HY - 0.05, 0], [0, 0, Math.PI/2]);
-    add(head, new THREE.ConeGeometry(0.13, 0.9, 24), 'white', [s*0.7, HY + 1.08, -0.05], [0, 0, -s*0.32]);
+    add(head, new THREE.CylinderGeometry(0.34, 0.34, 0.22, 18), 'white', [s*1.1, HY - 0.05, 0], [0, 0, Math.PI/2]);
+    add(head, new THREE.CylinderGeometry(0.27, 0.27, 0.24, 18), 'cyan', [s*1.1, HY - 0.05, 0], [0, 0, Math.PI/2]);
+    add(head, new THREE.CylinderGeometry(0.17, 0.17, 0.26, 14), 'black', [s*1.1, HY - 0.05, 0], [0, 0, Math.PI/2]);
+    add(head, new THREE.ConeGeometry(0.13, 0.9, 12), 'white', [s*0.7, HY + 1.08, -0.05], [0, 0, -s*0.32]);
   });
 
   const torso = part('torso');
   add(torso, smoothLathe([[0,0],[0.6,0],[0.68,0.1],[0.8,0.42],[0.86,0.66],[0.8,0.86],[0.6,1.0],[0.26,1.08],[0,1.1]]), 'white', [0, 3.36, 0], null, [1, 1, 0.74]);
   add(torso, smoothLathe([[0.65,0],[0.57,0.25],[0.63,0.5]]), 'black', [0, 2.95, 0], null, [1, 1, 0.76]);
-  add(torso, new THREE.CylinderGeometry(0.16, 0.16, 0.5, 20), 'black', [0, 4.6, 0]);
-  [4.47, 4.59, 4.71].forEach(y => add(torso, new THREE.TorusGeometry(0.19, 0.06, 10, 28), 'black', [0, y, 0], [Math.PI/2, 0, 0]));
+  add(torso, new THREE.CylinderGeometry(0.16, 0.16, 0.5, 10), 'black', [0, 4.6, 0]);
+  [4.47, 4.59, 4.71].forEach(y => add(torso, new THREE.TorusGeometry(0.19, 0.06, 6, 14), 'black', [0, y, 0], [Math.PI/2, 0, 0]));
 
   const hips = part('hips');
   add(hips, smoothLathe([[0,0],[0.3,0.03],[0.55,0.14],[0.68,0.34],[0.7,0.5],[0.64,0.62],[0,0.64]]), 'white', [0, 2.42, 0], null, [1, 1, 0.76]);
-  add(hips, new THREE.SphereGeometry(0.3, 24, 16), 'black', [0, 2.42, 0], null, [1, 0.8, 0.9]);
-  [-1, 1].forEach(s => add(hips, new THREE.SphereGeometry(0.26, 24, 16), 'black', [s*0.43, 2.5, 0]));
+  add(hips, new THREE.SphereGeometry(0.3, 12, 8), 'black', [0, 2.42, 0], null, [1, 0.8, 0.9]);
+  [-1, 1].forEach(s => add(hips, new THREE.SphereGeometry(0.26, 12, 8), 'black', [s*0.43, 2.5, 0]));
 
   [1, -1].forEach(s => {
     const side = s > 0 ? 'L' : 'R';
     const arm = part('arm' + side);
-    add(arm, new THREE.SphereGeometry(0.34, 32, 20), 'white', [s*0.86, 4.2, 0], null, [1.05, 0.85, 0.95]);
-    add(arm, new THREE.CylinderGeometry(0.16, 0.16, 0.55, 20), 'black', [s*1.3, 4.15, 0], [0, 0, Math.PI/2]);
+    add(arm, new THREE.SphereGeometry(0.34, 16, 10), 'white', [s*0.86, 4.2, 0], null, [1.05, 0.85, 0.95]);
+    add(arm, new THREE.CylinderGeometry(0.16, 0.16, 0.55, 10), 'black', [s*1.3, 4.15, 0], [0, 0, Math.PI/2]);
     add(arm, capsule(0.23, 0.25, 0.55), 'white', [s*1.95, 4.15, 0], [0, 0, Math.PI/2]);
-    add(arm, new THREE.CylinderGeometry(0.12, 0.12, 0.2, 20), 'black', [s*2.44, 4.15, 0], [0, 0, Math.PI/2]);
+    add(arm, new THREE.CylinderGeometry(0.12, 0.12, 0.2, 10), 'black', [s*2.44, 4.15, 0], [0, 0, Math.PI/2]);
     const hand = part('hand' + side);
-    add(hand, new THREE.SphereGeometry(0.24, 24, 16), 'black', [s*2.68, 4.15, 0], null, [1.15, 0.55, 0.95]);
+    add(hand, new THREE.SphereGeometry(0.24, 12, 8), 'black', [s*2.68, 4.15, 0], null, [1.15, 0.55, 0.95]);
     [-0.15, -0.05, 0.05, 0.15].forEach((z, i) =>
       add(hand, capsule(0.055, 0.055, 0.2 + (i === 1 || i === 2 ? 0.04 : 0), 14), 'black', [s*3.0, 4.1, z], [0, 0, Math.PI/2 - s*0.25]));
     add(hand, capsule(0.06, 0.06, 0.14, 14), 'black', [s*2.74, 4.17, 0.26], [Math.PI/2 - 0.2, 0, 0]);
@@ -452,15 +478,15 @@ function buildRobot(){
     const x = s*0.44;
     const leg = part('leg' + side);
     add(leg, capsule(0.29, 0.33, 0.6), 'white', [x, 2.05, 0]);
-    add(leg, new THREE.SphereGeometry(0.23, 24, 16), 'black', [x, 1.5, 0.04], null, [1.15, 0.95, 1.05]);
+    add(leg, new THREE.SphereGeometry(0.23, 12, 8), 'black', [x, 1.5, 0.04], null, [1.15, 0.95, 1.05]);
     add(leg, capsule(0.26, 0.31, 0.62), 'white', [x, 0.95, 0]);
     const foot = part('foot' + side);
-    add(foot, new THREE.CylinderGeometry(0.18, 0.18, 0.2, 20), 'black', [x, 0.4, 0]);
-    add(foot, new THREE.SphereGeometry(0.42, 32, 16, 0, Math.PI*2, 0, Math.PI/2), 'white', [x, 0.08, 0.1], null, [0.95, 0.75, 1.35]);
-    add(foot, new THREE.CylinderGeometry(0.42, 0.42, 0.09, 32), 'black', [x, 0.045, 0.1], null, [0.95, 1, 1.35]);
+    add(foot, new THREE.CylinderGeometry(0.18, 0.18, 0.2, 10), 'black', [x, 0.4, 0]);
+    add(foot, new THREE.SphereGeometry(0.42, 16, 8, 0, Math.PI*2, 0, Math.PI/2), 'white', [x, 0.08, 0.1], null, [0.95, 0.75, 1.35]);
+    add(foot, new THREE.CylinderGeometry(0.42, 0.42, 0.09, 16), 'black', [x, 0.045, 0.1], null, [0.95, 1, 1.35]);
   });
 
-  Object.values(parts).forEach(p => { p.userData.home = recenter(p); });
+  Object.values(parts).forEach(p => { p.userData.home = recenter(p); mergeByMaterial(p); });
   return parts;
 }
 
@@ -481,7 +507,7 @@ ROBOT_PARTS.forEach(rp => {
   types.push({key:rp.key, label:rp.name, robot:rp, template:g, base:ROBOT_IN_BOX});
 });
 Object.keys(TOYS).forEach(k => {
-  const g = TOYS[k](); recenter(g);
+  const g = mergeByMaterial(TOYS[k]()); recenter(g);
   types.push({key:k, label:TOY_LABELS[k], robot:null, template:g, base:1});
 });
 types.forEach(t => {
@@ -523,7 +549,7 @@ scene.add(fill);
 
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.MeshStandardMaterial({map:woodTex, roughness:0.75, envMapIntensity:0.35}));
 floor.rotation.x = -Math.PI/2; floor.receiveShadow = true; scene.add(floor);
-const rug = new THREE.Mesh(new THREE.CircleGeometry(4.9, 72), new THREE.MeshStandardMaterial({map:rugTex, roughness:1, envMapIntensity:0.2}));
+const rug = new THREE.Mesh(new THREE.CircleGeometry(4.9, 48), new THREE.MeshStandardMaterial({map:rugTex, roughness:1, envMapIntensity:0.2}));
 rug.rotation.x = -Math.PI/2; rug.position.set(0, 0.01, 0.6); rug.receiveShadow = true; scene.add(rug);
 
 const BOX_W = 4.6, BOX_D = 3.3, WALL_H = 0.95, WALL_T = 0.24, BOX_Z = -0.35;
@@ -581,18 +607,23 @@ const R_TARGET = new THREE.Vector3(0, 3.5, 0);
 rScene.add(new THREE.HemisphereLight(0xbcd2ff, 0x1d2630, 0.45));
 const spot = new THREE.SpotLight(0xfff2e4, 2.2, 40, 0.42, 0.6, 1);
 spot.position.set(2.5, 12, 7); spot.target.position.set(0, 2.5, 0);
-spot.castShadow = true; spot.shadow.mapSize.set(512, 512); spot.shadow.bias = -0.0006;
+spot.castShadow = false; spot.shadow.bias = -0.0006;
 rScene.add(spot); rScene.add(spot.target);
 const rim = new THREE.DirectionalLight(0x6fd8ff, 0.9); rim.position.set(-5, 6, -6); rScene.add(rim);
 const rim2 = new THREE.DirectionalLight(0xffb7d0, 0.35); rim2.position.set(6, 4, -5); rScene.add(rim2);
-const rGround = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), new THREE.ShadowMaterial({opacity:0.35}));
-rGround.rotation.x = -Math.PI/2; rGround.receiveShadow = true; rScene.add(rGround);
-const stand = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.25, 0.22, 64),
+const blob = new THREE.Mesh(new THREE.CircleGeometry(1.5, 32), new THREE.MeshBasicMaterial({map:canvasTex(128, 128, (g, s) => {
+  const grd = g.createRadialGradient(s/2, s/2, 0, s/2, s/2, s/2);
+  grd.addColorStop(0, 'rgba(0,0,0,0.55)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, s, s);
+}), transparent:true, depthWrite:false}));
+blob.rotation.x = -Math.PI/2; blob.position.y = 0.226;
+const stand = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.25, 0.22, 32),
   new THREE.MeshPhysicalMaterial({color:0x2a3744, roughness:0.35, clearcoat:0.6, envMapIntensity:0.6}));
 stand.position.y = 0.11; stand.receiveShadow = true; rScene.add(stand);
 const ringMat = new THREE.MeshBasicMaterial({color:0x3ee9ff, toneMapped:false});
-const ring = new THREE.Mesh(new THREE.TorusGeometry(2.15, 0.035, 8, 120), ringMat);
+const ring = new THREE.Mesh(new THREE.TorusGeometry(2.15, 0.035, 6, 60), ringMat);
 ring.rotation.x = Math.PI/2; ring.position.y = 0.22; rScene.add(ring);
+rScene.add(blob);
 
 const rigParts = buildRobot();
 const ghostMat = new THREE.MeshBasicMaterial({color:0x8fdcff, transparent:true, opacity:0.1, depthWrite:false});
@@ -641,6 +672,13 @@ function burst(sc, pos, color, count, speed, size){
   }
 }
 
+/* ================= flight layer: robot parts fly across both windows ================= */
+const flyScene = new THREE.Scene();
+flyScene.environment = envTex;
+flyScene.add(new THREE.HemisphereLight(0xc4d6ff, 0x5a3a24, 0.6));
+const flyKey = new THREE.DirectionalLight(0xffe1c2, 1.4); flyKey.position.set(-3, 5, 6); flyScene.add(flyKey);
+const flyCam = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+
 /* ================= HUD & layout ================= */
 const panelEl = document.getElementById('robotPanel');
 const mainHud = document.getElementById('mainHud');
@@ -662,6 +700,7 @@ function layout(){
     mainRect = {x:0, y:top, w:W, h:H - top};
   }
   place(panelEl, robotRect); place(robotHud, robotRect); place(mainHud, mainRect);
+  flyCam.aspect = W/H; flyCam.updateProjectionMatrix();
   // main camera: fit the box and the tray
   const a = mainRect.w/mainRect.h;
   const half = Math.max(7.7/2, 6.3/2/a);
@@ -677,7 +716,7 @@ function layout(){
   rCam.lookAt(R_TARGET.x, R_TARGET.y + 0.25, R_TARGET.z);
   rCam.updateProjectionMatrix();
 }
-window.addEventListener('resize', layout);
+window.addEventListener('resize', () => { layout(); needRender = true; });
 layout();
 
 const toastEl = document.getElementById('toast');
@@ -749,7 +788,7 @@ function resetRig(){
   nodes.root.position.set(0, 0.22, 0); nodes.root.rotation.set(0, 0, 0);
   Object.values(rigParts).forEach(p => {
     p.visible = false; p.userData.ghost.visible = true;
-    p.position.copy(p.userData.rest); p.userData.drop = -1;
+    p.position.copy(p.userData.rest); p.userData.pop = -1; p.scale.setScalar(1);
   });
 }
 
@@ -824,7 +863,6 @@ function clearMatch(group){
   relayoutTray();
   const center = new THREE.Vector3(); group.forEach(o => center.add(o.obj.position)); center.multiplyScalar(1/3);
   burst(scene, center, 0xffd27a, 22, 3, 0.4);
-  toast('3 ' + plural(group[0].type.label) + ' cleared!', 1000);
   cleared[group[0].type.key] = 1;
   saveProgress();
   busy--;
@@ -832,36 +870,64 @@ function clearMatch(group){
 function plural(l){ return l.endsWith('s') ? l : l + 's'; }
 
 /* ---- robot parts go straight to the robot ---- */
+const FLY_D = 20, flights = [];
+const tmpV = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
+function toScreen(cam, rect, pos){
+  const v = pos.clone().project(cam);
+  return {x:rect.x + (v.x + 1)/2*rect.w, y:rect.y + (1 - v.y)/2*rect.h};
+}
+function pxPerUnit(cam, rect, pos){
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
+  const d = tmpV.copy(pos).sub(cam.position).dot(fwd);
+  return (rect.h/2)/(Math.tan(cam.fov*Math.PI/360)*d);
+}
+function flyPx(){ return (window.innerHeight/2)/(Math.tan(15*Math.PI/180)*FLY_D); }
+function setFlyPos(obj, sx, sy){
+  const th = Math.tan(15*Math.PI/180)*FLY_D, W = window.innerWidth, H = window.innerHeight;
+  obj.position.set(((sx/W)*2 - 1)*th*(W/H), (1 - (sy/H)*2)*th, -FLY_D);
+}
 function collectPart(it){
   world.removeBody(it.body); it.inWorld = false; wakeAll();
-  it.state = 'collected';
-  const lift = it.obj.position.clone().addScaledVector(MAIN_DIR, 1.6);
-  tween(it, lift, DISPLAY_Q, it.type.base*1.15, 0.35, 0, () => {
-    burst(scene, it.obj.position, 0x6ff0ff, 20, 3, 0.4);
-    it.obj.visible = false; it.state = 'gone';
-    sendOrb(it.obj.position, () => attach(it.type.key));
-  });
-  toast('Found the ' + it.type.label + '!', 1100);
+  it.state = 'flying';
+  const p = rigParts[it.type.key];
+  const endW = p.getWorldPosition(new THREE.Vector3());
+  const startW = it.obj.position.clone();
+  const f = {it, p,
+    s0:toScreen(mainCam, mainRect, startW), s1:toScreen(rCam, robotRect, endW),
+    k0:it.obj.scale.x*pxPerUnit(mainCam, mainRect, startW)/flyPx(),
+    k1:pxPerUnit(rCam, robotRect, endW)/flyPx(),
+    q0:mainCam.quaternion.clone().invert().multiply(it.obj.quaternion),
+    q1:rCam.quaternion.clone().invert().multiply(p.getWorldQuaternion(new THREE.Quaternion())),
+    t:0};
+  burst(scene, startW, 0x6ff0ff, 14, 2.5, 0.35);
+  scene.remove(it.obj); flyScene.add(it.obj);
+  setFlyPos(it.obj, f.s0.x, f.s0.y); it.obj.scale.setScalar(f.k0); it.obj.quaternion.copy(f.q0);
+  flights.push(f);
+}
+function updateFlights(dt){
+  const H = window.innerHeight;
+  for (let i = flights.length - 1; i >= 0; i--){
+    const f = flights[i];
+    f.t = Math.min(1, f.t + dt/(reduceMotion ? 0.3 : 0.9));
+    const e = easeInOut(f.t);
+    const sx = f.s0.x + (f.s1.x - f.s0.x)*e;
+    const sy = f.s0.y + (f.s1.y - f.s0.y)*e - Math.sin(Math.PI*e)*Math.min(220, H*0.25);
+    setFlyPos(f.it.obj, sx, sy);
+    f.it.obj.scale.setScalar((f.k0 + (f.k1 - f.k0)*e)*(1 + 0.3*Math.sin(Math.PI*e)));
+    tmpQ.copy(f.q0).slerp(f.q1, e); f.it.obj.quaternion.copy(tmpQ);
+    if (f.t >= 1){
+      flyScene.remove(f.it.obj); f.it.state = 'gone';
+      flights.splice(i, 1);
+      attach(f.it.type.key);
+    }
+  }
 }
 
-function sendOrb(worldPos, done){
-  const v = worldPos.clone().project(mainCam);
-  const x0 = mainRect.x + (v.x + 1)/2*mainRect.w, y0 = mainRect.y + (1 - v.y)/2*mainRect.h;
-  const orb = document.createElement('div'); orb.className = 'orb';
-  orb.style.left = x0 + 'px'; orb.style.top = y0 + 'px';
-  document.body.appendChild(orb);
-  orb.getBoundingClientRect();
-  orb.style.left = (robotRect.x + robotRect.w/2) + 'px';
-  orb.style.top = (robotRect.y + robotRect.h*0.5) + 'px';
-  setTimeout(() => { orb.remove(); done(); }, reduceMotion ? 50 : 720);
-}
-
-const tmpV = new THREE.Vector3();
 function attach(name){
   const p = rigParts[name];
-  p.visible = true; p.userData.ghost.visible = false; p.userData.drop = 0;
+  p.visible = true; p.userData.ghost.visible = false; p.userData.pop = 0;
   p.getWorldPosition(tmpV);
-  burst(rScene, tmpV, 0x6ff0ff, 18, 3.5, 0.6);
+  burst(rScene, tmpV, 0x6ff0ff, 16, 3, 0.55);
   built.add(name);
   updateRobotHud();
   if (built.size === ROBOT_PARTS.length) clearProgress(); else saveProgress();
@@ -871,7 +937,7 @@ function attach(name){
       eyes.forEach(e => e.scale.y = 1);
       document.getElementById('win').classList.add('on');
       winTimer = setTimeout(freshGame, 45000); // resets itself for the next visitor
-    }, 900);
+    }, 700);
   }
 }
 
@@ -946,7 +1012,7 @@ document.getElementById('again').addEventListener('click', freshGame);
 
 /* ================= loop ================= */
 const clock = new THREE.Clock();
-let blinkAt = 2;
+let blinkAt = 2, active = true, needRender = true;
 function tick(){
   const dt = Math.min(clock.getDelta(), 0.05);
   gameTime += dt;
@@ -963,6 +1029,7 @@ function tick(){
     it.obj.visible = true; it.state = 'box';
   });
 
+  active = false;
   world.step(1/60, dt, 3);
   items.forEach(it => {
     if (it.state === 'box'){
@@ -978,9 +1045,6 @@ function tick(){
       it.obj.quaternion.copy(w.fromQ).slerp(w.toQ, e);
       it.obj.scale.setScalar(w.fromS + (w.toS - w.fromS)*e);
       if (w.t >= 1){ it.tw = null; if (w.then) w.then(); }
-    } else if (it.state === 'tray'){
-      it.spin += dt*0.8;
-      it.obj.quaternion.copy(DISPLAY_Q).multiply(spinQ.setFromAxisAngle(Y_AXIS, Math.sin(it.spin)*0.3));
     } else if (it.state === 'pop'){
       it.popT = Math.min(1, it.popT + dt/0.35);
       const s = it.type.trayScale*(1 + 0.35*Math.sin(Math.PI*Math.min(1, it.popT*1.7)))*(1 - it.popT);
@@ -1002,9 +1066,8 @@ function tick(){
   // robot window
   Object.values(rigParts).forEach(p => {
     const u = p.userData;
-    if (u.drop >= 0 && u.drop < 1){
-      u.drop = Math.min(1, u.drop + dt/(reduceMotion ? 0.15 : 0.7));
-      p.position.copy(u.rest); p.position.y += (1 - easeOutBounce(u.drop))*3.2;
+    if (u.pop >= 0 && u.pop < 1){
+      u.pop = Math.min(1, u.pop + dt/0.35); p.scale.setScalar(1 + 0.18*Math.sin(Math.PI*u.pop)); active = true;
     }
   });
   if (dancing){
@@ -1017,7 +1080,7 @@ function tick(){
     if (rigParts.head.visible){
       blinkAt -= dt;
       const bl = blinkAt < 0.12 && blinkAt > 0 ? 0.15 : 1;
-      eyes.forEach(e => e.scale.y = bl);
+      if (eyes[0].scale.y !== bl){ eyes.forEach(e => e.scale.y = bl); active = true; }
       if (blinkAt <= 0) blinkAt = rand(2, 4.5);
     }
   }
@@ -1034,7 +1097,15 @@ function tick(){
     if (k >= 1){ q.sc.remove(q.sp); q.sp.material.dispose(); particles.splice(i, 1); }
   }
 
-  // render both windows
+  updateFlights(dt);
+  if (flights.length || particles.length || dancing || trayShake > 0) active = true;
+  for (const it of items){
+    if (it.tw || it.state === 'pop' || it.state === 'queued' || (it.inWorld && it.body.sleepState !== CANNON.Body.SLEEPING)){ active = true; break; }
+  }
+  if (!active && !needRender){ requestAnimationFrame(tick); return; }
+  needRender = active;
+
+  // render both windows (and parts in flight across them)
   const H = window.innerHeight;
   renderer.setScissorTest(true);
   renderer.setViewport(mainRect.x, H - mainRect.y - mainRect.h, mainRect.w, mainRect.h);
@@ -1044,15 +1115,20 @@ function tick(){
   renderer.setScissor(robotRect.x, H - robotRect.y - robotRect.h, robotRect.w, robotRect.h);
   renderer.render(rScene, rCam);
   renderer.setScissorTest(false);
+  if (flights.length){
+    renderer.setViewport(0, 0, window.innerWidth, H);
+    renderer.autoClear = false; renderer.clearDepth();
+    renderer.render(flyScene, flyCam);
+    renderer.autoClear = true;
+  }
 
   requestAnimationFrame(tick);
 }
-const spinQ = new THREE.Quaternion(), Y_AXIS = new THREE.Vector3(0, 1, 0);
 newGame(loadProgress());
 (function linearize(){
   const done = new Set();
   const fix = m => { if (!m || done.has(m)) return; done.add(m); if (m.color && !m.isShadowMaterial) m.color.convertSRGBToLinear(); };
-  [scene, rScene].forEach(sc => sc.traverse(o => {
+  [scene, rScene, flyScene].forEach(sc => sc.traverse(o => {
     if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(fix);
     if (o.isLight){ o.color.convertSRGBToLinear(); if (o.groundColor) o.groundColor.convertSRGBToLinear(); }
   }));
