@@ -89,7 +89,10 @@ button.primary{background:var(--accent);color:var(--accent-text);border-color:tr
   background:var(--card);color:var(--card-text);border-radius:24px;padding:28px 34px;text-align:center;
   box-shadow:0 24px 60px #0006;transition:opacity .35s ease,transform .35s ease;min-width:260px;
 }
-.win.on{opacity:1;transform:translate(-50%,-50%) scale(1);pointer-events:auto}
+.win.on{opacity:1;transform:translate(-50%,-50%) scale(1);pointer-events:auto;visibility:visible}
+/* the hidden win card must never catch taps (its button sat invisibly over the box) */
+.win:not(.on){visibility:hidden}
+.win:not(.on) *{pointer-events:none}
 .win h3{margin:0 0 6px;font-size:30px}
 .win p{margin:0 0 20px;color:var(--card-muted);font-size:17px}
 .orb{
@@ -151,7 +154,7 @@ const easeOutBounce = x => {
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
 const DPR = window.devicePixelRatio || 1;
-renderer.setPixelRatio(window.innerWidth*window.innerHeight*DPR*DPR > 3000000 ? 1 : Math.min(DPR, 1.25));
+renderer.setPixelRatio(Math.min(DPR, 2));
 // if the GPU drops the drawing context, ask the browser to restore it instead of failing
 canvas.addEventListener('webglcontextlost', e => e.preventDefault(), false);
 renderer.outputEncoding = THREE.sRGBEncoding;
@@ -178,7 +181,7 @@ function canvasTex(w, h, draw, repeat){
   draw(cv.getContext('2d'), w, h);
   const t = new THREE.CanvasTexture(cv);
   t.encoding = THREE.sRGBEncoding;
-  t.anisotropy = 4;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
   if (repeat){ t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat, repeat); }
   return t;
 }
@@ -232,7 +235,7 @@ const glowTex = canvasTex(128, 128, (g, s) => {
 });
 
 /* ================= materials ================= */
-const plastic = c => new THREE.MeshStandardMaterial({color:c, roughness:0.42, envMapIntensity:0.65});
+const plastic = c => new THREE.MeshPhysicalMaterial({color:c, roughness:0.38, clearcoat:0.35, clearcoatRoughness:0.25, envMapIntensity:0.7});
 const T = {
   red:plastic(0xc8413b), orange:plastic(0xdc7434), yellow:plastic(0xe6ad34), green:plastic(0x5a9750),
   teal:plastic(0x2c8a86), blue:plastic(0x386ab0), navy:plastic(0x2b3d66), purple:plastic(0x7b58a5),
@@ -459,7 +462,6 @@ function buildRobot(){
 
   const hips = part('hips');
   add(hips, smoothLathe([[0,0],[0.3,0.03],[0.55,0.14],[0.68,0.34],[0.7,0.5],[0.64,0.62],[0,0.64]]), 'white', [0, 2.42, 0], null, [1, 1, 0.76]);
-  add(hips, new THREE.SphereGeometry(0.3, 12, 8), 'black', [0, 2.42, 0], null, [1, 0.8, 0.9]);
   [-1, 1].forEach(s => add(hips, new THREE.SphereGeometry(0.26, 12, 8), 'black', [s*0.43, 2.5, 0]));
 
   [1, -1].forEach(s => {
@@ -539,9 +541,12 @@ scene.add(new THREE.HemisphereLight(0xc4d6ff, 0x5a3a24, 0.55));
 const key = new THREE.DirectionalLight(0xffe1c2, 1.55);
 key.position.set(-5, 12, 6);
 key.castShadow = true;
-key.shadow.mapSize.set(1024, 1024);
-Object.assign(key.shadow.camera, {left:-7, right:7, top:7, bottom:-7, near:1, far:30});
-key.shadow.bias = -0.0006;
+key.shadow.mapSize.set(2048, 2048);
+Object.assign(key.shadow.camera, {left:-5.5, right:5.5, top:5.5, bottom:-5.5, near:4, far:24});
+key.shadow.bias = -0.0004;
+key.shadow.normalBias = 0.02;
+// soft light from the camera side so the fronts of toys aren't too dark
+const camFill = new THREE.DirectionalLight(0xfff4e8, 0.3); camFill.position.set(0, 10, 4); scene.add(camFill);
 scene.add(key);
 const fill = new THREE.DirectionalLight(0x9cc3ff, 0.35);
 fill.position.set(7, 5, -3);
@@ -587,8 +592,8 @@ world.gravity.set(0, -16, 0);
 world.broadphase = new CANNON.NaiveBroadphase();
 world.allowSleep = true;
 world.solver.iterations = 12;
-world.defaultContactMaterial.friction = 0.45;
-world.defaultContactMaterial.restitution = 0.1;
+world.defaultContactMaterial.friction = 0.6;
+world.defaultContactMaterial.restitution = 0;
 (function(){
   const add = (hx, hy, hz, x, y, z) => { const b = new CANNON.Body({mass:0, shape:new CANNON.Box(new CANNON.Vec3(hx, hy, hz))}); b.position.set(x, y, z); world.addBody(b); };
   add(BOX_W/2 + 2, 0.5, BOX_D/2 + 2, 0, -0.3, BOX_Z);                  // floor of the box (top at 0.2)
@@ -607,13 +612,13 @@ const R_TARGET = new THREE.Vector3(0, 3.5, 0);
 rScene.add(new THREE.HemisphereLight(0xbcd2ff, 0x1d2630, 0.45));
 const spot = new THREE.SpotLight(0xfff2e4, 2.2, 40, 0.42, 0.6, 1);
 spot.position.set(2.5, 12, 7); spot.target.position.set(0, 2.5, 0);
-spot.castShadow = false; spot.shadow.bias = -0.0006;
+spot.castShadow = true; spot.shadow.mapSize.set(1024, 1024); spot.shadow.bias = -0.0004; spot.shadow.normalBias = 0.02;
 rScene.add(spot); rScene.add(spot.target);
 const rim = new THREE.DirectionalLight(0x6fd8ff, 0.9); rim.position.set(-5, 6, -6); rScene.add(rim);
 const rim2 = new THREE.DirectionalLight(0xffb7d0, 0.35); rim2.position.set(6, 4, -5); rScene.add(rim2);
 const blob = new THREE.Mesh(new THREE.CircleGeometry(1.5, 32), new THREE.MeshBasicMaterial({map:canvasTex(128, 128, (g, s) => {
   const grd = g.createRadialGradient(s/2, s/2, 0, s/2, s/2, s/2);
-  grd.addColorStop(0, 'rgba(0,0,0,0.55)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+  grd.addColorStop(0, 'rgba(0,0,0,0.35)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = grd; g.fillRect(0, 0, s, s);
 }), transparent:true, depthWrite:false}));
 blob.rotation.x = -Math.PI/2; blob.position.y = 0.226;
@@ -751,7 +756,9 @@ function makeItem(type){
   obj.visible = false;
   scene.add(obj);
   const body = new CANNON.Body({mass:type.robot ? 1.3 : 0.8, shape:new CANNON.Box(type.half), linearDamping:0.05, angularDamping:0.2});
-  body.allowSleep = true; body.sleepSpeedLimit = 0.15; body.sleepTimeLimit = 0.6;
+  body.linearDamping = 0.25; body.angularDamping = 0.5;
+  body.allowSleep = true; body.sleepSpeedLimit = 0.35; body.sleepTimeLimit = 0.3;
+  body.calm = 0;
   const it = {type, obj, body, state:'queued', inWorld:false};
   obj.userData.item = it;
   return it;
@@ -814,7 +821,7 @@ function relayoutTray(){
     tween(it, slotPos(i, it), DISPLAY_Q, it.type.trayScale, wasNew ? 0.45 : 0.25, wasNew ? 1.6 : 0.3, () => { it.state = 'tray'; it.spin = 0; });
   });
 }
-function wakeAll(){ items.forEach(o => { if (o.inWorld) o.body.wakeUp(); }); }
+function wakeAll(){ items.forEach(o => { if (o.inWorld){ o.body.calm = 0; o.body.wakeUp(); } }); }
 
 function pick(it){
   if (it.state !== 'box') return;
@@ -852,7 +859,7 @@ function putBack(it){
     it.body.position.set(to.x, to.y, to.z);
     it.body.quaternion.set(it.obj.quaternion.x, it.obj.quaternion.y, it.obj.quaternion.z, it.obj.quaternion.w);
     it.body.velocity.set(0, -2, 0); it.body.angularVelocity.set(rand(-3, 3), rand(-3, 3), rand(-3, 3));
-    it.body.wakeUp();
+    it.body.calm = 0; it.body.wakeUp();
     world.addBody(it.body); it.inWorld = true; it.state = 'box';
   });
 }
@@ -1031,6 +1038,13 @@ function tick(){
 
   active = false;
   world.step(1/60, dt, 3);
+  // settle the pile: anything barely moving for half a second is put to sleep, so it stops jittering
+  for (const it of items){
+    if (!it.inWorld || it.body.sleepState === CANNON.Body.SLEEPING) continue;
+    const b = it.body;
+    if (b.velocity.length() < 0.4 && b.angularVelocity.length() < 0.8){ if (++b.calm > 30){ b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0); b.sleep(); } }
+    else b.calm = 0;
+  }
   items.forEach(it => {
     if (it.state === 'box'){
       const b = it.body;
