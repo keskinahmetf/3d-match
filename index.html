@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Find the robot</title>
+<title>Find the pieces, complete the robot!</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -112,10 +112,10 @@ button.primary{background:var(--accent);color:var(--accent-text);border-color:tr
 </head>
 <body>
 <div id="robotPanel"></div>
-<canvas id="c" tabindex="0" aria-label="A toy box full of toys and robot parts, and a robot being built"></canvas>
+<canvas id="c" tabindex="0" aria-label="A box full of objects and robot parts, and a robot being built"></canvas>
 
 <div class="hud" id="mainHud">
-  <h1 class="title">Find the robot</h1>
+  <h1 class="title">Find the pieces, complete the robot!</h1>
   <div class="toast" id="toast" role="status"></div>
   <div class="win" id="win" role="dialog" aria-label="Robot complete">
     <h3>Robot complete!</h3>
@@ -127,7 +127,7 @@ button.primary{background:var(--accent);color:var(--accent-text);border-color:tr
   </div>
 </div>
 <div class="hud" id="robotHud">
-  <div class="rhead"><h2>Your robot</h2><span id="rcount">0 of 11 parts</span></div>
+  <div class="rhead"><span id="rcount">0 of 11 parts</span></div>
   <div class="chips" id="chips"></div>
 </div>
 
@@ -586,9 +586,9 @@ function drawTrayLabel(){
   const g = trayLabelCanvas.getContext('2d'), w = 1024, h = 110;
   g.clearRect(0, 0, w, h);
   g.fillStyle = '#4a3527';
-  g.font = '700 74px Fredoka, Trebuchet MS, sans-serif';
+  g.font = '700 64px Fredoka, Trebuchet MS, sans-serif';
   g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText('MATCH 3 TOYS TO CLEAR', w/2, h/2 + 4);
+  g.fillText('MATCH 3 OBJECTS TO CLEAR', w/2, h/2 + 4);
 }
 drawTrayLabel();
 const trayLabelTex = new THREE.CanvasTexture(trayLabelCanvas);
@@ -844,7 +844,6 @@ function pick(it){
   if (busy) return;
   if (tray.length >= 3){
     trayShake = 0.5;
-    toast('Tray is full. Tap a toy in the tray to put it back.', 1800);
     return;
   }
   world.removeBody(it.body); it.inWorld = false; wakeAll();
@@ -858,7 +857,7 @@ function pick(it){
     busy++;
     setTimeout(() => clearMatch(same), 560);
   } else if (tray.length >= 3){
-    setTimeout(() => toast('No match. Tap a toy in the tray to put it back.', 1800), 500);
+    setTimeout(() => { trayShake = 0.5; }, 480);
   }
 }
 
