@@ -505,7 +505,8 @@ const types = [];
 const robotTemplate = buildRobot();
 ROBOT_PARTS.forEach(rp => {
   const g = new THREE.Group(); g.add(robotTemplate[rp.key]);
-  types.push({key:rp.key, label:rp.name, robot:rp, template:g, base:ROBOT_IN_BOX});
+  // hands are small, so they get a bigger size in the box
+  types.push({key:rp.key, label:rp.name, robot:rp, template:g, base:ROBOT_IN_BOX*(rp.key.startsWith('hand') ? 1.25 : rp.key === 'head' ? 0.8 : 1)});
 });
 Object.keys(TOYS).forEach(k => {
   const g = mergeByMaterial(TOYS[k]()); recenter(g);
@@ -617,6 +618,12 @@ world.defaultContactMaterial.restitution = 0;
   add(BOX_W/2 + T2, H, T2/2, 0, H, BOX_Z + BOX_D/2 + T2/2);
   add(T2/2, H, BOX_D/2, -BOX_W/2 - T2/2, H, BOX_Z);
   add(T2/2, H, BOX_D/2, BOX_W/2 + T2/2, H, BOX_Z);
+  // invisible gentle ramp (18°) along the front wall only: pieces can't hide in the bottom corners the camera can't see
+  const RAMP = 18*Math.PI/180, RISE = 0.3, RUN = RISE/Math.tan(RAMP);
+  const rampBody = new CANNON.Body({mass:0, shape:new CANNON.Box(new CANNON.Vec3(BOX_W/2, 0.04, Math.hypot(RISE, RUN)/2))});
+  rampBody.position.set(0, 0.2 + RISE/2 - 0.04, BOX_Z + BOX_D/2 - RUN/2);
+  rampBody.quaternion.setFromEuler(-RAMP, 0, 0);
+  world.addBody(rampBody);
 })();
 
 /* ================= robot scene (its own window) ================= */
@@ -675,8 +682,16 @@ Object.keys(rigParts).forEach(name => {
   nodes[name].add(gh);
   nodes[name].add(p);
 });
-const eyes = [];
+const eyes = [], happyEyes = [];
 rigParts.head.traverse(o => { if (o.userData.eye) eyes.push(o); });
+// happy eyes for the dance: upside-down arcs, like a smiling ^ ^
+eyes.forEach(e => {
+  const h = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.05, 8, 24, Math.PI), M.cyan);
+  h.position.copy(e.position); h.quaternion.copy(e.quaternion);
+  h.translateY(-0.06); h.translateZ(0.05);
+  h.visible = false;
+  e.parent.add(h); happyEyes.push(h);
+});
 
 /* ================= particles ================= */
 const particles = [];
@@ -812,6 +827,8 @@ function resetRig(){
     p.visible = false; p.userData.ghost.visible = true;
     p.position.copy(p.userData.rest); p.userData.pop = -1; p.scale.setScalar(1);
   });
+  eyes.forEach(e => { e.visible = true; e.scale.y = 1; });
+  happyEyes.forEach(h => h.visible = false);
 }
 
 function updateRobotHud(){
@@ -955,7 +972,8 @@ function attach(name){
   if (built.size === ROBOT_PARTS.length){
     setTimeout(() => {
       dancing = true; danceT = 0;
-      eyes.forEach(e => e.scale.y = 1);
+      eyes.forEach(e => { e.scale.y = 1; e.visible = false; });
+      happyEyes.forEach(h => h.visible = true);
       document.getElementById('win').classList.add('on');
       winTimer = setTimeout(freshGame, 45000); // resets itself for the next visitor
     }, 700);
