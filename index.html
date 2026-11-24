@@ -88,17 +88,25 @@ button.primary{background:var(--accent);color:var(--accent-text);border-color:tr
   background:var(--chip);color:var(--muted);transition:background .3s ease,color .3s ease,transform .3s ease;
 }
 .chips i.on{background:var(--chip-on);color:var(--chip-on-text);transform:scale(1.05)}
+/* dark see-through layer over the box when the robot is complete */
+.scrim{
+  position:absolute;inset:0;background:rgba(18,12,8,.5);opacity:0;transition:opacity .45s ease;
+}
+.hud > .scrim{pointer-events:none}
+.scrim.on{opacity:1}
 .win{
   position:absolute;left:50%;top:46%;transform:translate(-50%,-50%) scale(.92);opacity:0;pointer-events:none;
-  background:var(--card);color:var(--card-text);border-radius:24px;padding:28px 34px;text-align:center;
-  box-shadow:0 24px 60px #0006;transition:opacity .35s ease,transform .35s ease;min-width:260px;
+  background:var(--card);color:var(--card-text);border-radius:32px;padding:48px 64px 44px;text-align:center;
+  box-shadow:0 30px 80px #0008;transition:opacity .35s ease,transform .35s ease;
+  min-width:min(420px, 86%);max-width:92%;
 }
 .win.on{opacity:1;transform:translate(-50%,-50%) scale(1);pointer-events:auto;visibility:visible}
 /* the hidden win card must never catch taps (its button sat invisibly over the box) */
 .win:not(.on){visibility:hidden}
 .win:not(.on) *{pointer-events:none}
-.win h3{margin:0 0 6px;font-size:30px}
-.win p{margin:0 0 20px;color:var(--card-muted);font-size:17px}
+.win h3{margin:0 0 10px;font-size:clamp(28px, 3.4vw, 46px);white-space:nowrap}
+.win p{margin:0 0 30px;color:var(--card-muted);font-size:clamp(17px, 2vw, 23px)}
+.win button{font-size:clamp(17px, 1.9vw, 22px);padding:18px 38px}
 .orb{
   position:fixed;z-index:3;width:30px;height:30px;border-radius:50%;pointer-events:none;
   background:radial-gradient(circle,#ffffff 0%,#7ff0ff 35%,#28c8ff00 70%);
@@ -111,7 +119,7 @@ button.primary{background:var(--accent);color:var(--accent-text);border-color:tr
   .timer{font-size:15px;right:14px;top:14px}
   .chips{display:none}
 }
-@media (prefers-reduced-motion:reduce){button,.toast,.win,.chips i,.orb{transition:none}}
+@media (prefers-reduced-motion:reduce){button,.toast,.win,.scrim,.chips i,.orb{transition:none}}
 </style>
 </head>
 <body>
@@ -121,6 +129,7 @@ button.primary{background:var(--accent);color:var(--accent-text);border-color:tr
 <div class="hud" id="mainHud">
   <h1 class="title">Find the pieces, complete the robot!</h1>
   <div class="toast" id="toast" role="status"></div>
+  <div class="scrim" id="scrim"></div>
   <div class="win" id="win" role="dialog" aria-label="Robot complete">
     <h3>Robot complete!</h3>
     <p id="winText">You found all the pieces.</p>
@@ -805,6 +814,7 @@ function makeItem(type){
 function newGame(saved){
   clearTimeout(winTimer);
   document.getElementById('win').classList.remove('on');
+  document.getElementById('scrim').classList.remove('on');
   items.forEach(it => { if (it.inWorld) world.removeBody(it.body); scene.remove(it.obj); });
   items = []; tray = []; busy = 0; built = new Set(); cleared = {};
   dancing = false; danceT = 0;
@@ -982,6 +992,7 @@ function attach(name){
       dancing = true; danceT = 0;
       eyes.forEach(e => { e.scale.y = 1; e.visible = false; });
       happyEyes.forEach(h => h.visible = true);
+      document.getElementById('scrim').classList.add('on');
       document.getElementById('win').classList.add('on');
       winTimer = setTimeout(freshGame, 45000); // resets itself for the next visitor
     }, 700);
