@@ -40,6 +40,9 @@
 }
 *,*::before,*::after{box-sizing:inherit}
 html,body{height:100%;margin:0}
+/* touch screens: no grey tap flash, no long-press callout or selection */
+*{-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
+html,body{touch-action:none;overscroll-behavior:none}
 body{
   background:var(--scene);color:var(--text);
   font-family:"72","Segoe UI",Arial,system-ui,sans-serif;
@@ -113,7 +116,7 @@ button.primary{background:var(--accent);color:var(--accent-text);border-color:tr
 </head>
 <body>
 <div id="robotPanel"></div>
-<canvas id="c" tabindex="0" aria-label="A box full of objects and robot parts, and a robot being built"></canvas>
+<canvas id="c" aria-label="A box full of objects and robot parts, and a robot being built"></canvas>
 
 <div class="hud" id="mainHud">
   <h1 class="title">Find the pieces, complete the robot!</h1>
@@ -1051,6 +1054,8 @@ canvas.addEventListener('pointermove', e => {
   if (e.pointerType !== 'mouse') return;
   canvas.style.cursor = hitItem(e) ? 'pointer' : 'default';
 });
+// no long-press menu on touch screens
+canvas.addEventListener('contextmenu', e => e.preventDefault());
 document.getElementById('restart').addEventListener('click', freshGame);
 document.getElementById('again').addEventListener('click', freshGame);
 
